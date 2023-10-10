@@ -122,6 +122,29 @@ TEST_CASE("Tensor Constructors", "[Tensor]") {
             REQUIRE(t2.shape()[0] == 2);
             REQUIRE(t2.shape()[1] == 3);
         }
+
+        SECTION("Non-trivial objects") {
+            Tensor<std::string, 1> t{Shape<1>{3}};
+            REQUIRE(t.shape_at(0) == 3);
+            REQUIRE(t.at(0) == "");
+            REQUIRE(t.at(1) == "");
+            REQUIRE(t.at(2) == "");
+        }
+
+        SECTION("Non-trivial objects with value") {
+            Tensor<std::string, 1> t{Shape<1>{3}, "hello"};
+            REQUIRE(t.shape_at(0) == 3);
+            REQUIRE(t.at(0) == "hello");
+            REQUIRE(t.at(1) == "hello");
+            REQUIRE(t.at(2) == "hello");
+        }
+
+        SECTION("Non-trivial objects with initialization list") {
+            Tensor<std::string, 1> t{"hello", "world"};
+            REQUIRE(t.shape_at(0) == 2);
+            REQUIRE(t.at(0) == "hello");
+            REQUIRE(t.at(1) == "world");
+        }
     }
 }
 
@@ -185,8 +208,8 @@ TEST_CASE("Fill", "[Tensor]") {
 }
 
 TEST_CASE("Transpose", "[Tensor]") {
-    Tensor<int, 2> t{{1,2,3},
-                     {4,5,6}};
+    Tensor<int, 2> t{{1, 2, 3},
+                     {4, 5, 6}};
     t = t.transpose();
 
     REQUIRE(t.shape_at(0) == 3);
@@ -197,6 +220,43 @@ TEST_CASE("Transpose", "[Tensor]") {
     REQUIRE(t.at(1, 1) == 5);
     REQUIRE(t.at(2, 0) == 3);
     REQUIRE(t.at(2, 1) == 6);
+}
+
+TEST_CASE("Map", "[Tensor]") {
+    SECTION("Square") {
+        const Tensor<int, 2> t{{1, 2},
+                               {3, 4}};
+
+        const auto res = t.map([](const auto el) { return el * el; });
+        REQUIRE(res.shape() == t.shape());
+        REQUIRE(res.at(0, 0) == 1);
+        REQUIRE(res.at(0, 1) == 4);
+        REQUIRE(res.at(1, 0) == 9);
+        REQUIRE(res.at(1, 1) == 16);
+    }
+
+    SECTION("To String") {
+        const Tensor<int, 2> t{{1, 2},
+                               {3, 4}};
+
+        const auto res = t.map([](const auto el) { return std::to_string(el); });
+        REQUIRE(res.shape() == t.shape());
+        REQUIRE(res.at(0, 0) == "1");
+        REQUIRE(res.at(0, 1) == "2");
+        REQUIRE(res.at(1, 0) == "3");
+        REQUIRE(res.at(1, 1) == "4");
+    }
+}
+
+TEST_CASE("Stats", "[Tensor]") {
+    const Tensor<double, 2> t{{3.0, 6.0},
+                              {5.0, 4.0}};
+
+    REQUIRE(t.min() == 3.0);
+    REQUIRE(t.max() == 6.0);
+    REQUIRE(t.mean() == 4.5);
+    REQUIRE(t.var() == 1.25);
+    REQUIRE(t.std() == 1.118033988749895);
 }
 
 TEST_CASE("Zeros", "[Tensor]") {
@@ -250,7 +310,27 @@ TEST_CASE("Range", "[Tensor]") {
     }
 }
 
-TEST_CASE("Tensor Equality") {
+TEST_CASE("Complex Numbers", "[Tensor]") {
+    using namespace std::complex_literals;
+    const Tensor<std::complex<double>, 2> t{{1.0 + 4i, 2.0 + 3i},
+                                            {3.0 + 2i, 4.0 + 1i}};
+    const auto t_real = t.real();
+    const auto t_imag = t.imag();
+
+    STATIC_REQUIRE(std::is_same_v<decltype(t_real)::ValueType, double>);
+    REQUIRE(t_real.at(0, 0) == 1.0);
+    REQUIRE(t_real.at(0, 1) == 2.0);
+    REQUIRE(t_real.at(1, 0) == 3.0);
+    REQUIRE(t_real.at(1, 1) == 4.0);
+
+    STATIC_REQUIRE(std::is_same_v<decltype(t_imag)::ValueType, double>);
+    REQUIRE(t_imag.at(0, 0) == 4.0);
+    REQUIRE(t_imag.at(0, 1) == 3.0);
+    REQUIRE(t_imag.at(1, 0) == 2.0);
+    REQUIRE(t_imag.at(1, 1) == 1.0);
+}
+
+TEST_CASE("Tensor Equality", "[Tensor]") {
     Tensor<int, 1> t1{1, 2, 3};
     Tensor<int, 1> t2{1, 2, 3};
     Tensor<int, 1> t3{4, 5, 6};

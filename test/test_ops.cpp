@@ -161,6 +161,42 @@ TEST_CASE("Modulo", "[Ops]") {
     }
 }
 
+TEST_CASE("Power", "[Ops]") {
+    const Tensor<int, 2> base{{1, 2},
+                           {3, 4}};
+    const Tensor<int, 2> exp{{1, 2},
+                           {3, 4}};
+
+    const auto res = pow(base, exp);
+    REQUIRE(res.shape() == base.shape());
+    REQUIRE(res.at(0, 0) == 1);
+    REQUIRE(res.at(0, 1) == 4);
+    REQUIRE(res.at(1, 0) == 27);
+    REQUIRE(res.at(1, 1) == 256);
+}
+
+TEST_CASE("Ops vs scalar", "[Ops]") {
+    SECTION("Tensor + Scalar") {
+        const Tensor<int, 2> t{{1, 2},
+                           {3, 4}};
+        const auto res = t + 3;
+        REQUIRE(res.at(0, 0) == 4);
+        REQUIRE(res.at(0, 1) == 5);
+        REQUIRE(res.at(1, 0) == 6);
+        REQUIRE(res.at(1, 1) == 7);
+    }
+
+    SECTION("Scalar + Tensor") {
+        const Tensor<int, 2> t{{1, 2},
+                               {3, 4}};
+        const auto res = 3 + t;
+        REQUIRE(res.at(0, 0) == 4);
+        REQUIRE(res.at(0, 1) == 5);
+        REQUIRE(res.at(1, 0) == 6);
+        REQUIRE(res.at(1, 1) == 7);
+    }
+}
+
 TEST_CASE("Matrix product", "[Ops]") {
     Tensor<int, 2> lhs{{1, 2},
                        {3, 4}};
@@ -289,7 +325,6 @@ TEST_CASE("Other comparison ops", "[Ops]") {
     }
 }
 
-// TODO: Change the function call to operator+
 TEST_CASE("Broadcasting ops", "[Ops]") {
     SECTION("Same dims") {
         SECTION("(2) and (2)") {

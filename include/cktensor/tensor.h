@@ -9,6 +9,7 @@
 #include <functional>
 #include <algorithm>
 #include <numeric>
+#include <complex>
 
 #include "allocator.h"
 #include "util.h"
@@ -135,7 +136,13 @@ public:
 //            : shape_{shape}, capacity_{shape_.num_elem()}, data_{allocator_.allocate(capacity_)} {}
 
     Tensor(Shape<Dims> shape)
-            : shape_{shape}, capacity_{shape.num_elem()}, data_{allocator_.allocate(capacity_)} {}
+            : shape_{shape}, capacity_{shape.num_elem()}, data_{allocator_.allocate(capacity_)} {
+        // Non-trivial objects cause problems if not initialized
+        if constexpr (!std::is_trivial_v<T>) {
+            for (auto it = begin(); it != end(); ++it)
+                std::allocator_traits<AllocatorType>::construct(allocator_, it);
+        }
+    }
 
     Tensor(Shape<Dims> shape, const T& val) : Tensor(shape) {
         std::fill(begin(), end(), val);
@@ -350,14 +357,44 @@ public:
 
         return ret;
     }
-
-    template<class TReturn>
-    Tensor<TReturn, Dims> map(std::function<TReturn(T)> function) const {
-        Tensor<TReturn, Dims> result{shape()};
+    template<typename F>
+    auto map(F f) const {
+        Tensor<std::invoke_result_t<F, ValueType>, Dims> result{shape()};
         for (std::size_t i = 0; i < num_elem(); i++) {
-            result.data_[i] = function(data_[i]);
+            result.data()[i] = std::forward<F>(f)(data_[i]);
         }
         return result;
+    }
+
+    // TODO: Also add axis-wise min/max/sum/mean/var/std
+    T min() const {
+        return *std::min_element(begin(), end());
+    }
+
+    T max() const {
+        return *std::max_element(begin(), end());
+    }
+
+    T sum() const {
+        return std::accumulate(begin(), end(), T{});
+    }
+
+    T mean() const {
+        return sum() / num_elem();
+    }
+
+    T var() const {
+        T m = mean();
+        const auto diff_sqr = [&](T sum, T el) {
+            auto diff = el - m;
+            return diff * diff + sum;
+        };
+
+        return std::accumulate(begin(), end(), T{}, diff_sqr) / num_elem();
+    }
+
+    T std() const {
+        return std::sqrt(var());
     }
 
     std::size_t count_nonzero() {
@@ -445,6 +482,16 @@ public:
 
     const T* end() const {
         return data_ + num_elem();
+    }
+
+    /* Complex Numbers */
+
+    auto real() const requires std::is_same_v<T, std::complex<typename T::value_type>> {
+        return map([](auto el){ return el.real(); });
+    }
+
+    auto imag() const requires std::is_same_v<T, std::complex<typename T::value_type>> {
+        return map([](auto el){ return el.imag(); });
     }
 
 //    friend class TensorView<T>;

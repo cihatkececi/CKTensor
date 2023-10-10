@@ -5,11 +5,13 @@
 #include "tensor.h"
 #include "gemm.h"
 
+// TODO: Add inplace operators
 
 namespace ck {
 
 // Implementation for the broadcasting ops
-class BroadcastError : public std::exception {};
+class BroadcastError : public std::exception {
+};
 
 namespace impl {
 template<typename Op, typename T, typename U>
@@ -99,6 +101,13 @@ struct Ge {
     }
 };
 
+template<typename T, typename U>
+struct Pow {
+    constexpr auto operator()(const T& lhs, const U& rhs) const {
+        return std::pow(lhs, rhs);
+    }
+};
+
 template<std::size_t LHSDim, std::size_t RHSDim>
 auto broadcast_shape(const Shape<LHSDim>& lhs, const Shape<RHSDim>& rhs) {
     Shape<std::max(LHSDim, RHSDim)> ret;
@@ -133,43 +142,42 @@ auto broadcast_shape(const Shape<LHSDim>& lhs, const Shape<RHSDim>& rhs) {
     return ret;
 }
 
-// TODO: I think I can male dims and curr_dim template parameters
-//template<typename Op, typename T, std::size_t TDims, typename U, std::size_t UDims>
-template <typename Op>
+template<typename Op, std::size_t dims, std::size_t curr_dim>
 void binary_op_broadcasting_impl(const auto*& lhs, const std::size_t* lhs_shape,
                                  const auto*& rhs, const std::size_t* rhs_shape,
-                                 auto*& out, std::size_t dims, std::size_t curr_dim) {
+                                 auto*& out) {
     Op op;
 
-    if (curr_dim == dims) {
+    if constexpr (curr_dim == dims) {
         *out = op(*lhs, *rhs);
         lhs++;
         rhs++;
         out++;
         return;
     }
-
-    if (*lhs_shape == *rhs_shape) {
-        for (std::size_t i = 0; i < *lhs_shape; i++) {
-            binary_op_broadcasting_impl<Op>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out, dims, curr_dim + 1);
+    else {
+        if (*lhs_shape == *rhs_shape) {
+            for (std::size_t i = 0; i < *lhs_shape; i++) {
+                binary_op_broadcasting_impl<Op, dims, curr_dim + 1>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out);
+            }
         }
-    }
-    else if (*lhs_shape == 1) {
-        for (std::size_t i = 0; i < *rhs_shape; i++) {
-            auto lhs_begin = lhs;
-            binary_op_broadcasting_impl<Op>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out, dims, curr_dim + 1);
+        else if (*lhs_shape == 1) {
+            for (std::size_t i = 0; i < *rhs_shape; i++) {
+                auto lhs_begin = lhs;
+                binary_op_broadcasting_impl<Op, dims, curr_dim + 1>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out);
 
-            if (i != *rhs_shape - 1)
-                lhs = lhs_begin;
+                if (i != *rhs_shape - 1)
+                    lhs = lhs_begin;
+            }
         }
-    }
-    else if (*rhs_shape == 1) {
-        for (std::size_t i = 0; i < *lhs_shape; i++) {
-            auto rhs_begin = rhs;
-            binary_op_broadcasting_impl<Op>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out, dims, curr_dim + 1);
+        else if (*rhs_shape == 1) {
+            for (std::size_t i = 0; i < *lhs_shape; i++) {
+                auto rhs_begin = rhs;
+                binary_op_broadcasting_impl<Op, dims, curr_dim + 1>(lhs, lhs_shape + 1, rhs, rhs_shape + 1, out);
 
-            if (i != *lhs_shape - 1)
-                rhs = rhs_begin;
+                if (i != *lhs_shape - 1)
+                    rhs = rhs_begin;
+            }
         }
     }
 }
@@ -197,8 +205,8 @@ struct BinaryOpBroadcasting {
         auto* rhs_data = rhs.data();
         auto* out_data = out.data();
 
-        binary_op_broadcasting_impl<Op>(lhs_data, lhs_shape.data(), rhs_data, rhs_shape.data(),
-                                        out_data, out_shape.dims(), 0);
+        binary_op_broadcasting_impl<Op, out_shape.dims(), 0>(lhs_data, lhs_shape.data(), rhs_data, rhs_shape.data(),
+                                                             out_data);
 
         return out;
     }
@@ -232,6 +240,35 @@ struct BinaryOp {
         }
 
         return BinaryOpBroadcasting<Op, T, TDims, U, UDims>{}(lhs, rhs);
+    }
+};
+
+template<typename Op, typename T, std::size_t TDims, typename U>
+struct BinaryOp<Op, T, TDims, U, 0> {
+    using RetType = typename RetScalarType<Op, T, U>::type;
+
+    constexpr auto operator()(const Tensor<T, TDims>& lhs, const U& rhs) const {
+        Op op;
+
+        Tensor<RetType, TDims> res{lhs.shape()};
+
+        for (std::size_t i = 0; i < lhs.num_elem(); i++) {
+            res.data()[i] = op(lhs.data()[i], rhs);
+        }
+
+        return res;
+    }
+
+    constexpr auto operator()(const U& lhs, const Tensor<T, TDims>& rhs) const {
+        Op op;
+
+        Tensor<RetType, TDims> res{rhs.shape()};
+
+        for (std::size_t i = 0; i < rhs.num_elem(); i++) {
+            res.data()[i] = op(lhs, rhs.data()[i]);
+        }
+
+        return res;
     }
 };
 }
@@ -315,9 +352,29 @@ auto operator+(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Add<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator+(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Add<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator+(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Add<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator-(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Sub<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator-(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Sub<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator-(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Sub<T, U>, T, TDims, U, 0>{}(lhs, rhs);
 }
 
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
@@ -325,9 +382,29 @@ auto operator*(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Mul<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator*(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Mul<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator*(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Mul<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator/(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Div<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator/(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Div<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator/(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Div<T, U>, T, TDims, U, 0>{}(lhs, rhs);
 }
 
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
@@ -335,9 +412,29 @@ auto operator%(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Mod<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator%(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Mod<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator%(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Mod<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator==(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Eq<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator==(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Eq<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator==(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Eq<T, U>, T, TDims, U, 0>{}(lhs, rhs);
 }
 
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
@@ -345,9 +442,29 @@ auto operator!=(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Neq<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator!=(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Neq<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator!=(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Neq<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator<(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Lt<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator<(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Lt<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator<(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Lt<T, U>, T, TDims, U, 0>{}(lhs, rhs);
 }
 
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
@@ -355,14 +472,59 @@ auto operator<=(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Le<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator<=(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Le<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator<=(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Le<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator>(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Gt<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
 }
 
+template<typename T, std::size_t TDims, typename U>
+auto operator>(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Gt<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator>(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Gt<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>
 auto operator>=(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
     return impl::BinaryOp<impl::Ge<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator>=(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Ge<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto operator>=(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Ge<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U, std::size_t UDims>
+auto pow(const Tensor<T, TDims>& lhs, const Tensor<U, UDims>& rhs) {
+    return impl::BinaryOp<impl::Pow<T, U>, T, TDims, U, UDims>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto pow(const Tensor<T, TDims>& lhs, const U& rhs) {
+    return impl::BinaryOp<impl::Pow<T, U>, T, TDims, U, 0>{}(lhs, rhs);
+}
+
+template<typename T, std::size_t TDims, typename U>
+auto pow(const U& lhs, const Tensor<T, TDims>& rhs) {
+    return impl::BinaryOp<impl::Pow<T, U>, T, TDims, U, 0>{}(lhs, rhs);
 }
 
 template<typename T, std::size_t TDims, typename U, std::size_t UDims>

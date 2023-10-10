@@ -14,3 +14,15 @@ TEST_CASE("Stack", "[Functions]") {
     REQUIRE(is_equal(res, Tensor<int, 2>{{1, 2},
                                          {3, 4}}));
 }
+
+TEST_CASE("Sine", "[Functions]") {
+    Tensor<double, 1> t{0, pi/2, 0, -pi/2};
+
+    auto res = sin(t);
+
+    REQUIRE(res.shape() == t.shape());
+    REQUIRE(res.at(0) == 0.0);
+    REQUIRE(res.at(1) == 1.0);
+    REQUIRE(res.at(2) == 0.0);
+    REQUIRE(res.at(3) == -1.0);
+}
